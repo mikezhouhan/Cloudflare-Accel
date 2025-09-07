@@ -410,14 +410,34 @@ const HOMEPAGE_HTML = `
 </html>
 `;
 
-async function handleToken(realm, service, scope) {
+function getGithubToken(env) {
+  return env?.GITHUB_PAT || env?.GITHUB_TOKEN || env?.GH_TOKEN || null;
+}
+
+function isGithubHost(host) {
+  return [
+    'github.com',
+    'api.github.com',
+    'raw.githubusercontent.com',
+    'gist.github.com',
+    'gist.githubusercontent.com'
+  ].includes(host);
+}
+
+async function handleToken(realm, service, scope, env) {
   const tokenUrl = `${realm}?service=${service}&scope=${scope}`;
   console.log(`Fetching token from: ${tokenUrl}`);
   try {
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
+    const headers = new Headers({ 'Accept': 'application/json' });
+
+    // If targeting GHCR and a GitHub PAT is provided, use Basic auth to obtain a registry token
+    const pat = getGithubToken(env);
+    if (pat && ((service && service.includes('ghcr.io')) || (realm && realm.includes('ghcr.io')))) {
+      const user = env?.GH_USERNAME || env?.GHCR_USERNAME || 'oauth2';
+      headers.set('Authorization', 'Basic ' + btoa(`${user}:${pat}`));
+    }
+
+    const tokenResponse = await fetch(tokenUrl, { method: 'GET', headers });
     if (!tokenResponse.ok) {
       console.log(`Token request failed: ${tokenResponse.status} ${tokenResponse.statusText}`);
       return null;
@@ -458,7 +478,7 @@ function getEmptyBodySHA256() {
   return 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 }
 
-async function handleRequest(request, redirectCount = 0) {
+async function handleRequest(request, env, redirectCount = 0) {
   const MAX_REDIRECTS = 5; // 最大重定向次数
   const url = new URL(request.url);
   let path = url.pathname;
@@ -593,6 +613,18 @@ async function handleRequest(request, redirectCount = 0) {
   newRequestHeaders.delete('x-amz-security-token');
   newRequestHeaders.delete('x-amz-user-agent');
 
+  // Inject GitHub PAT for GitHub hosts to access private content
+  try {
+    if (isGithubHost(targetDomain)) {
+      const ghPat = getGithubToken(env);
+      if (ghPat) {
+        newRequestHeaders.set('Authorization', `token ${ghPat}`);
+      }
+    }
+  } catch (e) {
+    console.log('Error applying GitHub token header:', e.message);
+  }
+
   if (isAmazonS3(targetUrl)) {
     newRequestHeaders.set('x-amz-content-sha256', getEmptyBodySHA256());
     newRequestHeaders.set('x-amz-date', new Date().toISOString().replace(/[-:T]/g, '').slice(0, -5) + 'Z');
@@ -617,7 +649,7 @@ async function handleRequest(request, redirectCount = 0) {
           const [, realm, service, scope] = authMatch;
           console.log(`Auth challenge: realm=${realm}, service=${service || targetDomain}, scope=${scope}`);
 
-          const token = await handleToken(realm, service || targetDomain, scope);
+          const token = await handleToken(realm, service || targetDomain, scope, env);
           if (token) {
             const authHeaders = new Headers(request.headers);
             authHeaders.set('Authorization', `Bearer ${token}`);
@@ -731,6 +763,6 @@ async function handleRequest(request, redirectCount = 0) {
 
 export default {
   async fetch(request, env, ctx) {
-    return handleRequest(request);
+    return handleRequest(request, env);
   }
 };

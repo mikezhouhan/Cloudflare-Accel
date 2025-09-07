@@ -13,6 +13,7 @@
   - [使用 Cloudflare Pages 部署](#使用-cloudflare-pages-部署)
 - [参数说明](#参数说明)
 - [使用示例](#使用示例)
+- [私有资源访问（可选）](#私有资源访问可选)
 - [许可证](#许可证)
 
 ## 特点
@@ -160,6 +161,19 @@
    curl https://your-domain/invalid.com/path
    ```
    - 返回：`Error: Invalid target domain.`
+
+## 私有资源访问（可选）
+
+在 Cloudflare Worker 环境变量中配置 GitHub 凭据后，可访问私有 GitHub 文件与私有 GHCR 镜像：
+
+- `GITHUB_PAT`（或 `GITHUB_TOKEN`/`GH_TOKEN`）：GitHub PAT（建议最小权限：读取仓库与 `packages:read`）。
+- `GH_USERNAME`（可选）：用于 GHCR 令牌交换的用户名（缺省为 `oauth2`）。
+
+行为说明：
+- 访问 `github.com`、`raw.githubusercontent.com`、`api.github.com`、`gist.*` 时自动附加 `Authorization: token <PAT>`，用于下载私有内容或私有 Release 资产（后续会重定向到带签名的 S3）。
+- 拉取 `ghcr.io` 私有镜像时，Worker 在 Docker 401 挑战阶段向令牌服务发起请求，并使用 Basic Auth（`<GH_USERNAME>:<PAT>`）换取 Registry Token，再以 Bearer Token 访问镜像清单/层。
+
+在 Cloudflare 仪表板 → Workers → 你的 Worker → Settings → Variables 中添加上述变量即可生效。
 
 ## 许可证
 
