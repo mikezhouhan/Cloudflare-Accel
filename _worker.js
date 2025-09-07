@@ -211,13 +211,13 @@ const HOMEPAGE_HTML = `
 
     <!-- GitHub 链接转换 -->
     <div class="section-box">
-      <h2 class="text-xl font-semibold mb-2">⚡ GitHub 文件加速</h2>
-      <p class="text-gray-600 dark:text-gray-300 mb-4">输入 GitHub 文件链接，自动转换为加速链接。也可以直接在链接前加上本站域名使用。</p>
+      <h2 class="text-xl font-semibold mb-2">⚡ GitHub 文件/仓库加速</h2>
+      <p class="text-gray-600 dark:text-gray-300 mb-4">输入 GitHub 文件或仓库链接，自动生成加速链接或 git clone 命令（支持 .git 仓库克隆）。也可以直接在链接前加上本站域名使用。</p>
       <div class="flex gap-2 mb-2">
         <input
           id="github-url"
           type="text"
-          placeholder="请输入 GitHub 文件链接，例如：https://github.com/user/repo/releases/..."
+          placeholder="请输入 GitHub 文件或仓库链接，例如：https://github.com/user/repo.git 或 https://github.com/user/repo/releases/..."
           class="flex-grow p-2 border border-gray-400 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
         >
         <button
@@ -229,8 +229,8 @@ const HOMEPAGE_HTML = `
       </div>
       <p id="github-result" class="mt-2 text-green-600 dark:text-green-400 result-text hidden"></p>
       <div id="github-buttons" class="flex gap-2 mt-2 github-buttons hidden">
-        <button onclick="copyGithubUrl()" class="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition w-full">📋 复制链接</button>
-        <button onclick="openGithubUrl()" class="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition w-full">🔗 打开链接</button>
+        <button id="github-copy-btn" onclick="copyGithubUrl()" class="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition w-full">📋 复制</button>
+        <button id="github-open-btn" onclick="openGithubUrl()" class="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500 transition w-full">🔗 打开链接</button>
       </div>
     </div>
 
@@ -333,12 +333,19 @@ const HOMEPAGE_HTML = `
       }
     }
 
-    // GitHub 链接转换
+    // GitHub 链接转换（含 .git 仓库克隆适配）
     let githubAcceleratedUrl = '';
+    function isGitRepoUrl(u) {
+      try {
+        const parsed = new URL(u);
+        return parsed.hostname === 'github.com' && parsed.pathname.endsWith('.git');
+      } catch { return false; }
+    }
     function convertGithubUrl() {
       const input = document.getElementById('github-url').value.trim();
       const result = document.getElementById('github-result');
       const buttons = document.getElementById('github-buttons');
+      const openBtn = document.getElementById('github-open-btn');
       if (!input) {
         showToast('请输入有效的 GitHub 链接', true);
         result.classList.add('hidden');
@@ -352,9 +359,19 @@ const HOMEPAGE_HTML = `
         return;
       }
 
-      // 保持现有格式：域名/https://原始链接
-      githubAcceleratedUrl = 'https://' + currentDomain + '/https://' + input.substring(8);
-      result.textContent = '加速链接: ' + githubAcceleratedUrl;
+      if (isGitRepoUrl(input)) {
+        // 适配 git clone：使用 /github.com/<owner>/<repo>.git 形式
+        const parsed = new URL(input);
+        const accel = 'https://' + currentDomain + '/github.com' + parsed.pathname;
+        githubAcceleratedUrl = 'git clone ' + accel;
+        result.textContent = '加速命令: ' + githubAcceleratedUrl;
+        if (openBtn) openBtn.classList.add('hidden');
+      } else {
+        // 普通文件/发布资产等：保持 域名/https:// 原始链接
+        githubAcceleratedUrl = 'https://' + currentDomain + '/https://' + input.substring(8);
+        result.textContent = '加速链接: ' + githubAcceleratedUrl;
+        if (openBtn) openBtn.classList.remove('hidden');
+      }
       result.classList.remove('hidden');
       buttons.classList.remove('hidden');
       copyToClipboard(githubAcceleratedUrl).then(() => {
