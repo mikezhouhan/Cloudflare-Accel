@@ -23,6 +23,7 @@ const ALLOWED_HOSTS = [
   'github.com',
   'api.github.com',
   'raw.githubusercontent.com',
+  'codeload.github.com',
   'gist.github.com',
   'gist.githubusercontent.com'
 ];
@@ -726,26 +727,45 @@ async function handleRequest(request, env, redirectCount = 0) {
       }
     }
 
-    // 处理 S3 重定向（Docker 镜像层）
-    if (isDockerRequest && (response.status === 307 || response.status === 302)) {
+    // 处理通用重定向（跟随至最终目标，保持在 Worker 内代理）
+    let redirectHops = 0;
+    while ([301, 302, 303, 307, 308].includes(response.status) && redirectHops < MAX_REDIRECTS) {
       const redirectUrl = response.headers.get('Location');
       if (redirectUrl) {
         console.log(`Redirect detected: ${redirectUrl}`);
         const EMPTY_BODY_SHA256 = getEmptyBodySHA256();
+        const absUrl = new URL(redirectUrl, targetUrl);
         const redirectHeaders = new Headers(request.headers);
-        redirectHeaders.set('Host', new URL(redirectUrl).hostname);
-        
-        // 对于任何重定向，都添加必要的AWS头（如果需要）
-        if (isAmazonS3(redirectUrl)) {
-          redirectHeaders.set('x-amz-content-sha256', EMPTY_BODY_SHA256);
-          redirectHeaders.set('x-amz-date', new Date().toISOString().replace(/[-:T]/g, '').slice(0, -5) + 'Z');
-        }
-        
-        if (response.headers.get('Authorization')) {
-          redirectHeaders.set('Authorization', response.headers.get('Authorization'));
+        redirectHeaders.set('Host', absUrl.hostname);
+
+        // 重新应用 GitHub 凭据（支持 Git 智能 HTTP）
+        try {
+          if (isGithubHost(absUrl.hostname)) {
+            const ghPat = getGithubToken(env);
+            const hasAuth = redirectHeaders.has('Authorization');
+            if (ghPat && !hasAuth) {
+              if (absUrl.hostname === 'github.com' && isGitSmartHttpPath(absUrl.pathname + absUrl.search)) {
+                const user = env?.GH_USERNAME || 'oauth2';
+                redirectHeaders.set('Authorization', 'Basic ' + btoa(`${user}:${ghPat}`));
+              } else {
+                redirectHeaders.set('Authorization', `token ${ghPat}`);
+              }
+            }
+          }
+        } catch (e) {
+          console.log('Error re-applying GitHub token on redirect:', e.message);
         }
 
-        const redirectRequest = new Request(redirectUrl, {
+        // 对于任何可能跳至 S3 的链接，添加必要的 AWS 头
+        if (isAmazonS3(absUrl.href)) {
+          redirectHeaders.set('x-amz-content-sha256', EMPTY_BODY_SHA256);
+          redirectHeaders.set('x-amz-date', new Date().toISOString().replace(/[-:T]/g, '').slice(0, -5) + 'Z');
+        } else {
+          redirectHeaders.delete('x-amz-content-sha256');
+          redirectHeaders.delete('x-amz-date');
+        }
+
+        const redirectRequest = new Request(absUrl.href, {
           method: request.method,
           headers: redirectHeaders,
           body: request.body,
@@ -753,14 +773,7 @@ async function handleRequest(request, env, redirectCount = 0) {
         });
         response = await fetch(redirectRequest);
         console.log(`Redirect response: ${response.status} ${response.statusText}`);
-
-        if (!response.ok) {
-          console.log('Redirect request failed, returning original redirect response');
-          return new Response(response.body, {
-            status: response.status,
-            headers: response.headers
-          });
-        }
+        redirectHops++;
       }
     }
 
