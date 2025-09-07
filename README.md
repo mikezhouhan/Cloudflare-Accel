@@ -175,6 +175,19 @@
 
 在 Cloudflare 仪表板 → Workers → 你的 Worker → Settings → Variables 中添加上述变量即可生效。
 
+### Git Clone 加速（含私有仓库）
+
+- 公有仓库：
+  ```bash
+  git clone https://your-domain/github.com/OWNER/REPO.git
+  ```
+- 私有仓库（需要在 Secret 中配置 `GITHUB_PAT` 和 `GH_USERNAME`）：
+  - Worker 会对 Git 智能 HTTP 端点（`.git`、`/info/refs?service=git-upload-pack`、`/git-upload-pack` 等）自动附加 `Authorization: Basic base64(GH_USERNAME:GITHUB_PAT)`。
+  - 命令不变：
+    ```bash
+    git clone https://your-domain/github.com/OWNER/PRIVATE_REPO.git
+    ```
+
 ## 许可证
 
 本项目基于 MIT 许可证。详情见 [LICENSE](LICENSE) 文件。

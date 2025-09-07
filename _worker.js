@@ -464,6 +464,19 @@ function isAmazonS3(url) {
   }
 }
 
+function isGitSmartHttpPath(p) {
+  if (!p) return false;
+  const path = p.toLowerCase();
+  return (
+    path.endsWith('.git') ||
+    path.includes('/info/refs') ||
+    path.endsWith('/git-upload-pack') ||
+    path.endsWith('/git-receive-pack') ||
+    path.includes('service=git-upload-pack') ||
+    path.includes('service=git-receive-pack')
+  );
+}
+
 // 计算请求体的 SHA256 哈希值
 async function calculateSHA256(message) {
   const encoder = new TextEncoder();
@@ -617,8 +630,14 @@ async function handleRequest(request, env, redirectCount = 0) {
   try {
     if (isGithubHost(targetDomain)) {
       const ghPat = getGithubToken(env);
-      if (ghPat) {
-        newRequestHeaders.set('Authorization', `token ${ghPat}`);
+      const hasAuth = newRequestHeaders.has('Authorization');
+      if (ghPat && !hasAuth) {
+        if (targetDomain === 'github.com' && isGitSmartHttpPath(targetPath)) {
+          const user = env?.GH_USERNAME || 'oauth2';
+          newRequestHeaders.set('Authorization', 'Basic ' + btoa(`${user}:${ghPat}`));
+        } else {
+          newRequestHeaders.set('Authorization', `token ${ghPat}`);
+        }
       }
     }
   } catch (e) {
