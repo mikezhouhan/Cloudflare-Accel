@@ -53,6 +53,44 @@ const LIGHTNING_SVG = `
   <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
 </svg>`;
 
+// 登录页 HTML
+const LOGIN_HTML = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>访问验证</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style> body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#e5e7eb} .card{background:#111827;border:1px solid #334155;border-radius:0.75rem;padding:1.5rem;width:100%;max-width:380px;box-shadow:0 8px 16px rgba(0,0,0,.2)} </style>
+  </head>
+<body>
+  <div class="card">
+    <h1 class="text-xl font-semibold mb-4">请输入访问密码</h1>
+    <input id="pwd" type="password" placeholder="Password" class="w-full mb-3 p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+    <button id="btn" class="w-full bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">验证</button>
+    <p id="msg" class="mt-3 text-sm text-red-400 hidden"></p>
+  </div>
+  <script>
+    document.getElementById('btn').addEventListener('click', async () => {
+      const pwd = document.getElementById('pwd').value;
+      const msg = document.getElementById('msg');
+      msg.classList.add('hidden');
+      try {
+        const res = await fetch('/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
+        if (res.ok) { location.replace('/'); return; }
+        const data = await res.json().catch(() => ({ error: '验证失败' }));
+        msg.textContent = data.error || '验证失败';
+        msg.classList.remove('hidden');
+      } catch(e) {
+        msg.textContent = '网络错误：' + e.message;
+        msg.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>`;
+
 // 首页 HTML
 const HOMEPAGE_HTML = `
 <!DOCTYPE html>
@@ -509,6 +547,28 @@ function getEmptyBodySHA256() {
   return 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 }
 
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (!cookieHeader) return out;
+  cookieHeader.split(';').forEach(part => {
+    const idx = part.indexOf('=');
+    if (idx > -1) {
+      const k = part.slice(0, idx).trim();
+      const v = part.slice(idx + 1).trim();
+      out[k] = v;
+    }
+  });
+  return out;
+}
+
+async function isAuthenticated(request, env) {
+  const uiPwd = env?.UI_PASSWORD;
+  if (!uiPwd) return true; // 未设置密码则不启用保护
+  const cookies = parseCookies(request.headers.get('Cookie') || '');
+  const expected = await calculateSHA256(uiPwd);
+  return cookies['ACCEL_AUTH'] === expected;
+}
+
 async function handleRequest(request, env, redirectCount = 0) {
   const MAX_REDIRECTS = 5; // 最大重定向次数
   const url = new URL(request.url);
@@ -517,12 +577,29 @@ async function handleRequest(request, env, redirectCount = 0) {
   // 记录请求信息
   console.log(`Request: ${request.method} ${path}`);
 
-  // 首页路由
+  // 认证与登录
+  if (path === '/auth' && request.method === 'POST') {
+    const body = await request.json().catch(() => ({}));
+    const provided = body?.password || '';
+    const uiPwd = env?.UI_PASSWORD;
+    if (!uiPwd) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (provided && provided === uiPwd) {
+      const cookieVal = await calculateSHA256(uiPwd);
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      headers.append('Set-Cookie', `ACCEL_AUTH=${cookieVal}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+    }
+    return new Response(JSON.stringify({ error: '密码错误' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // 首页路由（受保护，仅当设置了 UI_PASSWORD 且未验证时显示登录页）
   if (path === '/' || path === '') {
-    return new Response(HOMEPAGE_HTML, {
-      status: 200,
-      headers: { 'Content-Type': 'text/html' }
-    });
+    if (!(await isAuthenticated(request, env))) {
+      return new Response(LOGIN_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    }
+    return new Response(HOMEPAGE_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } });
   }
 
   // 处理 Docker V2 API 或 GitHub 代理请求
